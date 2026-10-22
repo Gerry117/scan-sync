@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>扫描仪 · 手机同步 · 生成PDF</title>
-  <!-- 使用 PeerJS 实现 WebRTC 点对点连接，无需后端 -->
+  <title>扫描仪 · 智能增强 · A4自适应 · 压缩PDF</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-  <!-- 引入 jsPDF 用于生成 PDF -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();"></script>
   <style>
     * {
       box-sizing: border-box;
@@ -237,6 +236,7 @@
       box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
       opacity: 0;
       transition: opacity 0.1s;
+      z-index: 2;
     }
     .photo-card.selected .order-badge {
       opacity: 1;
@@ -259,9 +259,27 @@
       cursor: pointer;
       opacity: 0;
       transition: opacity 0.15s;
+      z-index: 2;
     }
     .photo-card:hover .remove-btn {
       opacity: 1;
+    }
+    .photo-card .crop-badge {
+      position: absolute;
+      bottom: 6px;
+      right: 6px;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(4px);
+      color: white;
+      border: none;
+      border-radius: 30px;
+      padding: 2px 8px;
+      font-size: 0.65rem;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      z-index: 2;
+      pointer-events: none;
     }
     .empty-state {
       grid-column: 1 / -1;
@@ -294,6 +312,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
     }
     .selection-info strong {
       color: #2563eb;
@@ -304,11 +323,9 @@
       gap: 10px;
       flex-wrap: wrap;
     }
-    /* 手机拍照输入隐藏 */
     #mobileCameraInput {
       display: none;
     }
-    /* 二维码区域（可选，简单显示PeerID） */
     .connect-hint {
       font-size: 0.85rem;
       color: #64748b;
@@ -342,14 +359,170 @@
     .toast.show {
       opacity: 1;
     }
+    /* 裁剪编辑模态框 */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(4px);
+      z-index: 10000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-content {
+      background: white;
+      border-radius: 28px;
+      max-width: 900px;
+      width: 100%;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.3);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e2e8f0;
+      flex-shrink: 0;
+    }
+    .modal-header h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-body {
+      flex: 1;
+      overflow: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      background: #f1f5f9;
+    }
+    .canvas-wrapper {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+      background: #1e293b;
+    }
+    #cropCanvas {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    .crop-hint {
+      font-size: 0.85rem;
+      color: #64748b;
+      text-align: center;
+      background: white;
+      padding: 8px 16px;
+      border-radius: 30px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    .crop-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      padding: 16px 20px;
+      border-top: 1px solid #e2e8f0;
+      background: white;
+      flex-shrink: 0;
+    }
+    .mode-toggle {
+      display: flex;
+      gap: 4px;
+      background: #f1f5f9;
+      border-radius: 40px;
+      padding: 4px;
+    }
+    .mode-btn {
+      border: none;
+      background: transparent;
+      padding: 6px 16px;
+      border-radius: 30px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #64748b;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .mode-btn.active {
+      background: white;
+      color: #1e293b;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    .slider-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.85rem;
+      color: #475569;
+    }
+    .slider-container input[type="range"] {
+      width: 120px;
+      accent-color: #2563eb;
+    }
+    .loading-spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .auto-detect-badge {
+      background: #10b981;
+      color: white;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .quality-selector {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      color: #475569;
+    }
+    .quality-selector select {
+      padding: 4px 8px;
+      border-radius: 20px;
+      border: 1px solid #cbd5e1;
+      background: white;
+      font-size: 0.85rem;
+      color: #1e293b;
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <!-- 头部：标题 + 连接状态 -->
     <div class="header">
       <h1>
-        <span>📸</span> 扫描仪同步
+        <span>📸</span> 扫描仪同步 <span style="font-size:0.7rem; background:#10b981; color:white; padding:2px 8px; border-radius:20px; margin-left:6px;">智能增强</span>
       </h1>
       <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
         <div class="status-item">
@@ -361,7 +534,6 @@
       </div>
     </div>
 
-    <!-- 连接控制区：手机端显示拍照，电脑端显示等待连接 -->
     <div class="status-panel">
       <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; flex: 1;">
         <button class="btn btn-primary mobile-only" id="mobileCaptureBtn">
@@ -372,29 +544,29 @@
           🔗 连接手机
         </button>
         <span class="connect-hint desktop-only" id="hintText">
-          <i>💡</i> 在手机上打开本页，自动连接
+          <i>💡</i> A4自适应 · 自动增强
+        </span>
+        <span class="connect-hint mobile-only" id="hintTextMobile" style="display: none;">
+          <i>✨</i> 智能增强 · A4自适应
         </span>
       </div>
       <button class="btn btn-outline btn-sm" id="resetConnectionBtn" title="重置连接">重置</button>
     </div>
 
-    <!-- 照片预览网格 -->
     <div class="preview-area">
       <div class="preview-header">
         <h2>📄 已同步照片 <span id="photoCount" style="font-weight: 400; color: #64748b; font-size: 0.9rem;">(0)</span></h2>
         <button class="btn btn-outline btn-sm" id="clearAllBtn">清空</button>
       </div>
       <div class="photo-grid" id="photoGrid">
-        <!-- 照片卡片动态插入 -->
         <div class="empty-state" id="emptyState">
           <span>📱</span>
           <p>等待手机拍照同步…</p>
-          <p style="font-size: 0.85rem;">在手机上打开此页面，即可自动连接并拍照同步</p>
+          <p style="font-size: 0.85rem;">拍照后自动识别文档边缘、增强并适配A4</p>
         </div>
       </div>
     </div>
 
-    <!-- 工具栏：选择计数 + 生成PDF -->
     <div class="toolbar">
       <div class="selection-info">
         <span>已选 <strong id="selectedCount">0</strong> 张</span>
@@ -402,13 +574,54 @@
         <span>点击照片卡片按顺序选择</span>
       </div>
       <div class="actions">
+        <div class="quality-selector">
+          <span>PDF质量:</span>
+          <select id="pdfQualitySelect">
+            <option value="high">高 (原图)</option>
+            <option value="medium" selected>中 (压缩)</option>
+            <option value="low">低 (最小)</option>
+          </select>
+        </div>
         <button class="btn btn-outline" id="clearSelectionBtn">取消选择</button>
         <button class="btn btn-primary" id="generatePdfBtn" disabled>📑 生成扫描版PDF</button>
       </div>
     </div>
   </div>
 
-  <!-- 简易提示 -->
+  <!-- 裁剪编辑模态框 -->
+  <div class="modal-overlay" id="cropModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3><span>✂️</span> 编辑扫描件</h3>
+        <button class="btn btn-outline btn-sm" id="closeCropModalBtn">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="canvas-wrapper" id="canvasWrapper">
+          <canvas id="cropCanvas"></canvas>
+        </div>
+        <div class="crop-hint" id="cropHint">
+          🖱️ 拖动四个角点调整范围 · 或点击「自动吸附」重新识别
+        </div>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;">
+          <div class="mode-toggle" id="modeToggle">
+            <button class="mode-btn active" data-mode="color">🎨 彩色</button>
+            <button class="mode-btn" data-mode="gray">⬛ 灰度</button>
+          </div>
+          <div class="slider-container">
+            <span>对比度</span>
+            <input type="range" id="contrastSlider" min="0.5" max="2.5" step="0.1" value="1.2">
+            <span id="contrastValue">1.2</span>
+          </div>
+        </div>
+      </div>
+      <div class="crop-controls">
+        <button class="btn btn-outline" id="autoDetectBtn">🔍 自动吸附</button>
+        <button class="btn btn-outline" id="resetCornersBtn">↺ 重置角点</button>
+        <button class="btn btn-primary" id="applyCropBtn">✅ 应用编辑</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
   <script>
@@ -418,10 +631,22 @@
       let dataConnection = null;
       let myPeerId = '';
       let isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      // 存储所有已同步照片: { id, dataUrl, timestamp }
       let photos = [];
-      // 选中的照片id数组，顺序即选择顺序
       let selectedIds = [];
+      let openCvReady = false;
+
+      // 裁剪编辑状态
+      let currentEditPhotoId = null;
+      let originalImage = null;
+      let canvas, ctx;
+      let corners = [];
+      let canvasScale = 1;
+      let canvasWidth = 0, canvasHeight = 0;
+      let imgWidth = 0, imgHeight = 0;
+      let dragIndex = -1;
+      let isDragging = false;
+      let currentMode = 'color'; // 'color' | 'gray'
+      let currentContrast = 1.2;
 
       // DOM 元素
       const connectionDot = document.getElementById('connectionDot');
@@ -433,14 +658,22 @@
       const connectToPeerBtn = document.getElementById('connectToPeerBtn');
       const resetConnectionBtn = document.getElementById('resetConnectionBtn');
       const photoGrid = document.getElementById('photoGrid');
-      const emptyState = document.getElementById('emptyState');
       const photoCountSpan = document.getElementById('photoCount');
       const selectedCountSpan = document.getElementById('selectedCount');
       const clearAllBtn = document.getElementById('clearAllBtn');
       const clearSelectionBtn = document.getElementById('clearSelectionBtn');
       const generatePdfBtn = document.getElementById('generatePdfBtn');
-      const hintText = document.getElementById('hintText');
       const toastEl = document.getElementById('toast');
+      const cropModal = document.getElementById('cropModal');
+      const closeCropModalBtn = document.getElementById('closeCropModalBtn');
+      const autoDetectBtn = document.getElementById('autoDetectBtn');
+      const resetCornersBtn = document.getElementById('resetCornersBtn');
+      const applyCropBtn = document.getElementById('applyCropBtn');
+      const cropHint = document.getElementById('cropHint');
+      const modeToggle = document.getElementById('modeToggle');
+      const contrastSlider = document.getElementById('contrastSlider');
+      const contrastValue = document.getElementById('contrastValue');
+      const pdfQualitySelect = document.getElementById('pdfQualitySelect');
 
       // ---------- 工具函数 ----------
       function showToast(msg, duration = 2000) {
@@ -452,12 +685,10 @@
         }, duration);
       }
 
-      // 生成短ID (8位)
       function generateShortId() {
         return Math.random().toString(36).substring(2, 6) + Math.random().toString(36).substring(2, 6);
       }
 
-      // 更新连接状态 UI
       function updateConnectionUI(connected) {
         if (connected) {
           connectionDot.classList.add('connected');
@@ -468,72 +699,246 @@
         }
       }
 
-      // 更新照片计数和空状态
+      // ---------- OpenCV 初始化 ----------
+      window.onOpenCvReady = function() {
+        openCvReady = true;
+        console.log('OpenCV.js 加载完成');
+        if (isMobile) {
+          document.getElementById('hintTextMobile').style.display = 'flex';
+        }
+      };
+
+      // ---------- 边缘检测与透视变换 ----------
+      function detectDocumentCorners(imageElement) {
+        return new Promise((resolve) => {
+          if (!openCvReady || typeof cv === 'undefined') {
+            resolve(null);
+            return;
+          }
+          try {
+            const src = cv.imread(imageElement);
+            const gray = new cv.Mat();
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+            const blurred = new cv.Mat();
+            cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+            const edges = new cv.Mat();
+            cv.Canny(blurred, edges, 50, 150);
+            const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+            cv.dilate(edges, edges, kernel);
+            const contours = new cv.MatVector();
+            const hierarchy = new cv.Mat();
+            cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            let maxArea = 0;
+            let bestContour = null;
+            for (let i = 0; i < contours.size(); i++) {
+              const contour = contours.get(i);
+              const area = cv.contourArea(contour);
+              if (area > maxArea && area > 1000) {
+                maxArea = area;
+                bestContour = contour;
+              }
+            }
+            if (!bestContour) {
+              src.delete(); gray.delete(); blurred.delete(); edges.delete();
+              contours.delete(); hierarchy.delete(); kernel.delete();
+              resolve(null);
+              return;
+            }
+            const approx = new cv.Mat();
+            const peri = cv.arcLength(bestContour, true);
+            cv.approxPolyDP(bestContour, approx, 0.02 * peri, true);
+            let points = null;
+            if (approx.rows === 4) {
+              points = [];
+              for (let i = 0; i < 4; i++) {
+                points.push({
+                  x: approx.data32S[i * 2],
+                  y: approx.data32S[i * 2 + 1]
+                });
+              }
+              points = sortCorners(points);
+            }
+            src.delete(); gray.delete(); blurred.delete(); edges.delete();
+            contours.delete(); hierarchy.delete(); kernel.delete();
+            if (bestContour) bestContour.delete();
+            approx.delete();
+            resolve(points);
+          } catch (e) {
+            console.error('边缘检测失败:', e);
+            resolve(null);
+          }
+        });
+      }
+
+      function sortCorners(pts) {
+        if (pts.length !== 4) return pts;
+        const cx = pts.reduce((s, p) => s + p.x, 0) / 4;
+        const cy = pts.reduce((s, p) => s + p.y, 0) / 4;
+        pts.sort((a, b) => {
+          const angleA = Math.atan2(a.y - cy, a.x - cx);
+          const angleB = Math.atan2(b.y - cy, b.x - cx);
+          return angleA - angleB;
+        });
+        const sum = pts.map(p => p.x + p.y);
+        let startIdx = sum.indexOf(Math.min(...sum));
+        const ordered = [];
+        for (let i = 0; i < 4; i++) {
+          ordered.push(pts[(startIdx + i) % 4]);
+        }
+        if (ordered[1].x < ordered[0].x) {
+          ordered.splice(1, 3, ordered[3], ordered[2], ordered[1]);
+        }
+        return ordered;
+      }
+
+      // 透视变换 + 增强 + 灰度/彩色 + 对比度
+      function perspectiveTransformAndEnhance(imageElement, corners, options = {}) {
+        return new Promise((resolve) => {
+          if (!openCvReady || typeof cv === 'undefined') {
+            resolve(null);
+            return;
+          }
+          try {
+            const src = cv.imread(imageElement);
+            const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+              corners[0].x, corners[0].y,
+              corners[1].x, corners[1].y,
+              corners[2].x, corners[2].y,
+              corners[3].x, corners[3].y
+            ]);
+            
+            let outputWidth = options.outputWidth;
+            let outputHeight = options.outputHeight;
+            if (!outputWidth || !outputHeight) {
+              const w1 = Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
+              const w2 = Math.hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y);
+              const h1 = Math.hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y);
+              const h2 = Math.hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y);
+              outputWidth = Math.round(Math.max(w1, w2));
+              outputHeight = Math.round(Math.max(h1, h2));
+            }
+            
+            // 限制尺寸
+            const maxDim = 2000;
+            if (outputWidth > maxDim || outputHeight > maxDim) {
+              const scale = maxDim / Math.max(outputWidth, outputHeight);
+              outputWidth = Math.round(outputWidth * scale);
+              outputHeight = Math.round(outputHeight * scale);
+            }
+            
+            const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+              0, 0,
+              outputWidth, 0,
+              outputWidth, outputHeight,
+              0, outputHeight
+            ]);
+            const M = cv.getPerspectiveTransform(srcTri, dstTri);
+            const dst = new cv.Mat();
+            cv.warpPerspective(src, dst, M, new cv.Size(outputWidth, outputHeight), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
+            
+            // 增强处理
+            let processed = dst.clone();
+            
+            // 灰度模式
+            if (options.mode === 'gray') {
+              const grayMat = new cv.Mat();
+              cv.cvtColor(processed, grayMat, cv.COLOR_RGBA2GRAY);
+              cv.cvtColor(grayMat, processed, cv.COLOR_GRAY2RGBA);
+              grayMat.delete();
+            }
+            
+            // 对比度调整
+            const contrast = options.contrast || 1.0;
+            if (contrast !== 1.0) {
+              // 使用 convertScaleAbs 调整亮度和对比度
+              const alpha = contrast; // 对比度
+              const beta = 128 * (1 - alpha); // 亮度补偿，保持均值
+              const adjusted = new cv.Mat();
+              processed.convertTo(adjusted, -1, alpha, beta);
+              processed.delete();
+              processed = adjusted;
+            }
+            
+            // 转为 dataURL
+            const canvas = document.createElement('canvas');
+            canvas.width = outputWidth;
+            canvas.height = outputHeight;
+            cv.imshow(canvas, processed);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+            
+            // 清理
+            src.delete(); srcTri.delete(); dstTri.delete(); M.delete(); dst.delete();
+            if (processed) processed.delete();
+            
+            resolve({ dataUrl, width: outputWidth, height: outputHeight });
+          } catch (e) {
+            console.error('透视变换失败:', e);
+            resolve(null);
+          }
+        });
+      }
+
+      // ---------- A4尺寸适配 ----------
+      function getA4Dimensions(landscape = false) {
+        // A4 比例 1:1.414
+        if (landscape) {
+          return { width: 297, height: 210 };
+        } else {
+          return { width: 210, height: 297 };
+        }
+      }
+
+      // ---------- 照片管理 ----------
       function updatePhotoGrid() {
         photoCountSpan.textContent = `(${photos.length})`;
-        // 空状态展示
         if (photos.length === 0) {
-          if (!document.getElementById('emptyState')) {
-            const div = document.createElement('div');
-            div.className = 'empty-state';
-            div.id = 'emptyState';
-            div.innerHTML = `<span>📱</span><p>等待手机拍照同步…</p><p style="font-size: 0.85rem;">在手机上打开此页面，即可自动连接并拍照同步</p>`;
-            photoGrid.innerHTML = '';
-            photoGrid.appendChild(div);
-          } else {
-            // 确保只显示空状态
-            photoGrid.innerHTML = '';
-            const empty = document.createElement('div');
-            empty.className = 'empty-state';
-            empty.id = 'emptyState';
-            empty.innerHTML = `<span>📱</span><p>等待手机拍照同步…</p><p style="font-size: 0.85rem;">在手机上打开此页面，即可自动连接并拍照同步</p>`;
-            photoGrid.appendChild(empty);
-          }
-          // 清空选择
+          photoGrid.innerHTML = '';
+          const empty = document.createElement('div');
+          empty.className = 'empty-state';
+          empty.id = 'emptyState';
+          empty.innerHTML = `<span>📱</span><p>等待手机拍照同步…</p><p style="font-size: 0.85rem;">拍照后自动识别文档边缘、增强并适配A4</p>`;
+          photoGrid.appendChild(empty);
           if (selectedIds.length > 0) {
             selectedIds = [];
             updateSelectedCount();
           }
           return;
         }
-
-        // 移除空状态
         const existingEmpty = document.getElementById('emptyState');
         if (existingEmpty) existingEmpty.remove();
-
-        // 重新渲染所有卡片 (简化，但鉴于数量不多可以接受)
-        // 为了保留滚动位置和避免闪烁，可采用增量更新，但这里简单重建。
-        // 但重建会丢失选中状态？我们用 selectedIds 来标记。
-        const currentGrid = photoGrid;
-        // 先移除所有非空状态子节点
-        const children = Array.from(currentGrid.children);
+        const children = Array.from(photoGrid.children);
         children.forEach(child => {
           if (child.id !== 'emptyState') child.remove();
         });
-
-        // 按时间戳排序（旧->新）
         const sortedPhotos = [...photos].sort((a, b) => a.timestamp - b.timestamp);
-
         sortedPhotos.forEach(photo => {
           const card = document.createElement('div');
           card.className = 'photo-card';
           if (selectedIds.includes(photo.id)) {
             card.classList.add('selected');
-            // 显示顺序号
             const orderIndex = selectedIds.indexOf(photo.id) + 1;
             const badge = document.createElement('div');
             badge.className = 'order-badge';
             badge.textContent = orderIndex;
             card.appendChild(badge);
           }
-
           const img = document.createElement('img');
           img.src = photo.dataUrl;
           img.alt = '扫描照片';
           img.loading = 'lazy';
           card.appendChild(img);
 
-          // 删除按钮
+          const cropBadge = document.createElement('div');
+          cropBadge.className = 'crop-badge';
+          cropBadge.innerHTML = '✂️ 编辑';
+          cropBadge.style.cursor = 'pointer';
+          cropBadge.style.pointerEvents = 'auto';
+          cropBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openCropEditor(photo.id);
+          });
+          card.appendChild(cropBadge);
+
           const removeBtn = document.createElement('button');
           removeBtn.className = 'remove-btn';
           removeBtn.innerHTML = '✕';
@@ -544,27 +949,21 @@
           });
           card.appendChild(removeBtn);
 
-          // 点击卡片切换选中
           card.addEventListener('click', (e) => {
             e.stopPropagation();
             toggleSelect(photo.id);
           });
-
-          currentGrid.appendChild(card);
+          photoGrid.appendChild(card);
         });
-
-        // 如果选中的id在照片中不存在，移除
         selectedIds = selectedIds.filter(id => photos.some(p => p.id === id));
         updateSelectedCount();
       }
 
-      // 更新选中计数和按钮状态
       function updateSelectedCount() {
         selectedCountSpan.textContent = selectedIds.length;
         generatePdfBtn.disabled = selectedIds.length === 0;
       }
 
-      // 切换选中
       function toggleSelect(id) {
         const index = selectedIds.indexOf(id);
         if (index === -1) {
@@ -572,18 +971,12 @@
         } else {
           selectedIds.splice(index, 1);
         }
-        // 重新渲染卡片选中状态，为了性能只更新class和角标，但为了简单直接调用完整更新
-        // 但完整更新会重建DOM，可能导致图片重新加载；可以优化，但这里直接调用 updatePhotoGrid
-        // 但图片可能闪烁，我们采用更精细的方法：更新所有卡片的class和角标
-        // 但为了简单，直接调用updatePhotoGrid，因为图片量少，且是base64，重新渲染不会网络请求。
-        // 但会丢失滚动位置。我们保存一下滚动位置。
         const scrollTop = photoGrid.scrollTop;
         updatePhotoGrid();
         photoGrid.scrollTop = scrollTop;
-        updateSelectedCount(); // 内部也会调用
+        updateSelectedCount();
       }
 
-      // 删除单张照片
       function removePhoto(id) {
         photos = photos.filter(p => p.id !== id);
         selectedIds = selectedIds.filter(pid => pid !== id);
@@ -592,7 +985,6 @@
         showToast('已删除照片');
       }
 
-      // 清空所有照片
       function clearAllPhotos() {
         photos = [];
         selectedIds = [];
@@ -601,103 +993,366 @@
         showToast('已清空所有照片');
       }
 
-      // ---------- 添加照片（核心同步）----------
-      function addPhotoFromDataUrl(dataUrl, timestamp = Date.now()) {
+      // ---------- 添加照片（含自动裁剪增强）----------
+      async function addPhotoFromDataUrl(dataUrl, timestamp = Date.now(), autoCrop = true) {
         if (!dataUrl || !dataUrl.startsWith('data:image')) return;
         const id = 'photo_' + timestamp + '_' + Math.random().toString(36).substring(2, 8);
-        const photo = { id, dataUrl, timestamp };
+        let finalDataUrl = dataUrl;
+        let finalWidth = 0, finalHeight = 0;
+
+        if (autoCrop && openCvReady && typeof cv !== 'undefined') {
+          try {
+            const img = new Image();
+            img.src = dataUrl;
+            await new Promise((resolve, reject) => {
+              img.onload = resolve;
+              img.onerror = reject;
+            });
+            const detectedCorners = await detectDocumentCorners(img);
+            if (detectedCorners) {
+              // 默认使用彩色模式，对比度1.2
+              const result = await perspectiveTransformAndEnhance(img, detectedCorners, {
+                mode: currentMode,
+                contrast: currentContrast
+              });
+              if (result) {
+                finalDataUrl = result.dataUrl;
+                finalWidth = result.width;
+                finalHeight = result.height;
+                showToast('✨ 已自动增强并适配A4');
+              }
+            }
+          } catch (e) {
+            console.warn('自动裁剪失败，使用原图:', e);
+          }
+        }
+
+        // 如果未得到宽高，通过图片加载获取
+        if (!finalWidth || !finalHeight) {
+          const img = new Image();
+          img.src = finalDataUrl;
+          await new Promise((resolve) => { img.onload = resolve; });
+          finalWidth = img.width;
+          finalHeight = img.height;
+        }
+
+        const photo = { 
+          id, 
+          dataUrl: finalDataUrl, 
+          originalDataUrl: dataUrl,
+          timestamp,
+          width: finalWidth,
+          height: finalHeight,
+          mode: currentMode,
+          contrast: currentContrast
+        };
         photos.push(photo);
         updatePhotoGrid();
-        // 滚动到底部显示最新
         setTimeout(() => {
           photoGrid.scrollTop = photoGrid.scrollHeight;
         }, 50);
-        showToast('📸 收到新照片');
+        if (!autoCrop) {
+          showToast('📸 已保存照片');
+        }
       }
 
-      // 从手机拍照或相册选择
-      function handleMobileCapture(file) {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const dataUrl = e.target.result;
-          // 本地先显示
-          addPhotoFromDataUrl(dataUrl);
-          // 如果已连接电脑，则发送给电脑
-          if (dataConnection && dataConnection.open) {
-            dataConnection.send({
-              type: 'photo',
-              dataUrl: dataUrl,
-              timestamp: Date.now()
-            });
-            showToast('照片已同步到电脑');
+      // ---------- 裁剪编辑器 ----------
+      function openCropEditor(photoId) {
+        const photo = photos.find(p => p.id === photoId);
+        if (!photo) return;
+        
+        currentEditPhotoId = photoId;
+        currentMode = photo.mode || 'color';
+        currentContrast = photo.contrast || 1.2;
+        
+        // 更新UI
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.mode === currentMode);
+        });
+        contrastSlider.value = currentContrast;
+        contrastValue.textContent = currentContrast.toFixed(1);
+        
+        const srcDataUrl = photo.originalDataUrl || photo.dataUrl;
+        
+        cropModal.classList.add('active');
+        
+        canvas = document.getElementById('cropCanvas');
+        ctx = canvas.getContext('2d');
+        
+        const img = new Image();
+        img.onload = () => {
+          originalImage = img;
+          imgWidth = img.width;
+          imgHeight = img.height;
+          
+          const maxWidth = Math.min(window.innerWidth * 0.85, 800);
+          canvasScale = Math.min(maxWidth / imgWidth, (window.innerHeight * 0.5) / imgHeight, 1);
+          canvasWidth = Math.round(imgWidth * canvasScale);
+          canvasHeight = Math.round(imgHeight * canvasScale);
+          
+          canvas.width = canvasWidth;
+          canvas.height = canvasHeight;
+          
+          const padding = 10;
+          corners = [
+            { x: padding, y: padding },
+            { x: canvasWidth - padding, y: padding },
+            { x: canvasWidth - padding, y: canvasHeight - padding },
+            { x: padding, y: canvasHeight - padding }
+          ];
+          
+          if (openCvReady && typeof cv !== 'undefined') {
+            autoDetectCorners();
           } else {
-            // 未连接时仅保存在本地（预览），但也可以等到连接后发送？这里简单处理，只本地。
-            showToast('照片已保存到本地 (未连接电脑)');
+            drawCanvas();
+          }
+          drawCanvas();
+        };
+        img.src = srcDataUrl;
+      }
+
+      function drawCanvas() {
+        if (!ctx || !originalImage) return;
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        ctx.drawImage(originalImage, 0, 0, canvasWidth, canvasHeight);
+        
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.beginPath();
+        ctx.rect(0, 0, canvasWidth, canvasHeight);
+        if (corners.length === 4) {
+          ctx.moveTo(corners[0].x, corners[0].y);
+          ctx.lineTo(corners[3].x, corners[3].y);
+          ctx.lineTo(corners[2].x, corners[2].y);
+          ctx.lineTo(corners[1].x, corners[1].y);
+          ctx.closePath();
+        }
+        ctx.fill('evenodd');
+        ctx.restore();
+        
+        if (corners.length === 4) {
+          ctx.strokeStyle = '#2563eb';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(corners[0].x, corners[0].y);
+          ctx.lineTo(corners[1].x, corners[1].y);
+          ctx.lineTo(corners[2].x, corners[2].y);
+          ctx.lineTo(corners[3].x, corners[3].y);
+          ctx.closePath();
+          ctx.stroke();
+          
+          corners.forEach((c, i) => {
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#2563eb';
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(i + 1, c.x, c.y);
+          });
+        }
+      }
+
+      async function autoDetectCorners() {
+        if (!originalImage || !openCvReady) {
+          showToast('自动吸附引擎未就绪');
+          return;
+        }
+        showToast('正在识别文档边缘…');
+        cropHint.innerHTML = '⏳ 正在自动识别…';
+        try {
+          const detected = await detectDocumentCorners(originalImage);
+          if (detected && detected.length === 4) {
+            corners = detected.map(p => ({
+              x: p.x * canvasScale,
+              y: p.y * canvasScale
+            }));
+            drawCanvas();
+            showToast('✅ 已自动吸附文档边缘');
+            cropHint.innerHTML = '🖱️ 拖动四个角点调整范围 · 或点击「自动吸附」重新识别';
+          } else {
+            showToast('未检测到明显文档边缘');
+            cropHint.innerHTML = '⚠️ 未检测到边缘，请手动调整';
+          }
+        } catch (e) {
+          console.error(e);
+          showToast('识别失败，请手动调整');
+        }
+      }
+
+      // Canvas 交互
+      function setupCanvasInteraction() {
+        const getCanvasCoords = (e) => {
+          const rect = canvas.getBoundingClientRect();
+          const scaleX = canvas.width / rect.width;
+          const scaleY = canvas.height / rect.height;
+          let clientX, clientY;
+          if (e.touches) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+          } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+          }
+          return {
+            x: (clientX - rect.left) * scaleX,
+            y: (clientY - rect.top) * scaleY
+          };
+        };
+
+        const findNearbyCorner = (pos, threshold = 20) => {
+          for (let i = 0; i < corners.length; i++) {
+            const dx = pos.x - corners[i].x;
+            const dy = pos.y - corners[i].y;
+            if (Math.sqrt(dx*dx + dy*dy) < threshold) return i;
+          }
+          return -1;
+        };
+
+        const onStart = (e) => {
+          e.preventDefault();
+          const pos = getCanvasCoords(e);
+          const idx = findNearbyCorner(pos);
+          if (idx !== -1) {
+            dragIndex = idx;
+            isDragging = true;
+            canvas.style.cursor = 'grabbing';
           }
         };
-        reader.readAsDataURL(file);
+
+        const onMove = (e) => {
+          if (!isDragging || dragIndex === -1) return;
+          e.preventDefault();
+          const pos = getCanvasCoords(e);
+          const clampedX = Math.max(0, Math.min(canvasWidth, pos.x));
+          const clampedY = Math.max(0, Math.min(canvasHeight, pos.y));
+          corners[dragIndex] = { x: clampedX, y: clampedY };
+          drawCanvas();
+        };
+
+        const onEnd = (e) => {
+          if (isDragging) {
+            e.preventDefault();
+            isDragging = false;
+            dragIndex = -1;
+            canvas.style.cursor = 'crosshair';
+          }
+        };
+
+        canvas.addEventListener('mousedown', onStart);
+        canvas.addEventListener('mousemove', onMove);
+        canvas.addEventListener('mouseup', onEnd);
+        canvas.addEventListener('mouseleave', onEnd);
+        canvas.addEventListener('touchstart', onStart, { passive: false });
+        canvas.addEventListener('touchmove', onMove, { passive: false });
+        canvas.addEventListener('touchend', onEnd);
+        canvas.addEventListener('touchcancel', onEnd);
       }
 
-      // ---------- 初始化 PeerJS 连接 ----------
+      async function applyCrop() {
+        if (!currentEditPhotoId) return;
+        const photo = photos.find(p => p.id === currentEditPhotoId);
+        if (!photo) return;
+        
+        const realCorners = corners.map(c => ({
+          x: c.x / canvasScale,
+          y: c.y / canvasScale
+        }));
+        
+        showToast('正在应用编辑…');
+        
+        let result = null;
+        if (openCvReady && typeof cv !== 'undefined') {
+          result = await perspectiveTransformAndEnhance(originalImage, realCorners, {
+            mode: currentMode,
+            contrast: currentContrast
+          });
+        }
+        
+        if (result) {
+          photo.dataUrl = result.dataUrl;
+          photo.width = result.width;
+          photo.height = result.height;
+          photo.mode = currentMode;
+          photo.contrast = currentContrast;
+          showToast('✅ 编辑已应用');
+        } else {
+          // 降级：使用 canvas 裁剪
+          const canvas2 = document.createElement('canvas');
+          const minX = Math.min(...realCorners.map(c => c.x));
+          const maxX = Math.max(...realCorners.map(c => c.x));
+          const minY = Math.min(...realCorners.map(c => c.y));
+          const maxY = Math.max(...realCorners.map(c => c.y));
+          const w = maxX - minX;
+          const h = maxY - minY;
+          canvas2.width = w;
+          canvas2.height = h;
+          const ctx2 = canvas2.getContext('2d');
+          ctx2.drawImage(originalImage, minX, minY, w, h, 0, 0, w, h);
+          photo.dataUrl = canvas2.toDataURL('image/jpeg', 0.92);
+          photo.width = w;
+          photo.height = h;
+          photo.mode = currentMode;
+          photo.contrast = currentContrast;
+          showToast('✅ 已编辑（基础模式）');
+        }
+        
+        updatePhotoGrid();
+        closeCropModal();
+      }
+
+      function closeCropModal() {
+        cropModal.classList.remove('active');
+        currentEditPhotoId = null;
+        originalImage = null;
+        corners = [];
+        ctx = null;
+      }
+
+      function resetCorners() {
+        if (!originalImage) return;
+        const padding = 10;
+        corners = [
+          { x: padding, y: padding },
+          { x: canvasWidth - padding, y: padding },
+          { x: canvasWidth - padding, y: canvasHeight - padding },
+          { x: padding, y: canvasHeight - padding }
+        ];
+        drawCanvas();
+        showToast('角点已重置');
+      }
+
+      // ---------- PeerJS 连接 ----------
       function initPeer() {
-        // 如果已有peer，先销毁
         if (peer) {
           peer.destroy();
           peer = null;
         }
 
-        // 使用短ID便于手动输入，但为了自动连接方便，我们使用随机短ID且手机端自动连接电脑端？
-        // 为了自动连接：电脑端会生成ID并显示，手机端打开后自动连接？但手机端不知道电脑ID。
-        // 解决方案：使用固定的PeerJS云服务器，电脑端创建房间号？但手机端需要输入。
-        // 为了demo简单，我们让电脑端显示PeerID，手机端手动输入ID连接？但提示说自动连接？
-        // 为了真正自动连接，可以使用 PeerJS 的 "room" 概念，但需要信令服务器支持。或者使用URL参数传递。
-        // 更实际的做法：手机端扫描二维码？这里简单点：电脑端生成ID后，手机端在同一个局域网？无法自动发现。
-        // 所以这里改为：电脑端和手机端都打开页面，手机端可以手动输入电脑的PeerID连接。
-        // 但是需求是“手机拍照扫描的照片能直接同步到电脑端”， 我们可以用另一种方式：电脑端和手机端都连接到同一个PeerJS房间？但PeerJS不支持房间广播。
-        // 使用PeerJS的 "Peer" 作为服务器模式？不行。
-        // 因此，我们采用一种简单的方案：手机端打开页面后，如果检测到是移动端，可以尝试连接一个固定的ID？但无法知道电脑的ID。
-        // 因此最终决定：电脑端生成ID，手机端打开页面后，需要手动输入电脑ID进行连接。但为了简化，我们在界面上让手机端可以输入电脑ID。
-        // 但当前页面布局没有输入框。我们可以在连接面板增加一个输入框，但会破坏现有设计。
-        // 重新思考：使用一个公共的PeerJS服务器，所有客户端用相同的房间ID？PeerJS不支持多对一。
-        // 最好的办法：电脑端开启后，显示PeerID，手机端打开后，将电脑ID填入URL参数？但手机端如何获取？
-        // 为了演示，我们可以在电脑端显示二维码，手机扫描后自动连接。但需要QR库，增加复杂度。
-        // 鉴于时间，我们采用最简单的方案：电脑端和手机端都显示自己的PeerID，并提供“连接”按钮让用户手动输入对方ID。
-        // 需求中“手机拍照扫描的照片能直接同步到电脑端”， 我们允许手机端输入电脑ID进行连接，然后拍照同步。这在局域网内是可行的。
-        // 所以我们在手机端显示一个输入框，但当前UI没有。所以我们稍微调整UI：在手机端显示一个输入框，电脑端显示ID。
-        // 为了不使界面复杂，我们加一个隐藏的输入区域，通过按钮弹出prompt。
-        // 电脑端也可以连接手机，但不需要。
-        // 我们来实现：点击“连接手机”按钮，弹出prompt输入手机ID；手机端拍照按钮旁边加一个“连接电脑”按钮，弹出prompt输入电脑ID。
-        // 但手机端拍照按钮已经有了，我们再加一个“连接电脑”按钮。
-        // 修改HTML：添加一个手机端的连接按钮。
-        // 由于不能修改已写好的HTML结构太多，我们在JS中动态添加。
-        // 重新调整：在手机端（mobile-only）增加一个“连接电脑”按钮。放在status-panel中。
-        // 在JS中动态插入。
-        // 为了节省时间，直接在初始化时添加。
-
-        // 延迟执行以确保DOM存在
         setTimeout(() => {
           const statusPanel = document.querySelector('.status-panel');
-          if (statusPanel && isMobile) {
-            // 检查是否已存在连接按钮
-            if (!document.getElementById('connectToComputerBtn')) {
-              const btn = document.createElement('button');
-              btn.id = 'connectToComputerBtn';
-              btn.className = 'btn btn-outline';
-              btn.textContent = '🔗 连接电脑';
-              btn.style.marginLeft = '8px';
-              btn.addEventListener('click', () => {
-                const targetId = prompt('请输入电脑端显示的ID（区分大小写）:');
-                if (targetId && targetId.trim()) {
-                  connectToPeer(targetId.trim());
-                }
-              });
-              statusPanel.querySelector('div:first-child').appendChild(btn);
-            }
+          if (statusPanel && isMobile && !document.getElementById('connectToComputerBtn')) {
+            const btn = document.createElement('button');
+            btn.id = 'connectToComputerBtn';
+            btn.className = 'btn btn-outline';
+            btn.textContent = '🔗 连接电脑';
+            btn.style.marginLeft = '8px';
+            btn.addEventListener('click', () => {
+              const targetId = prompt('请输入电脑端显示的ID（区分大小写）:');
+              if (targetId && targetId.trim()) {
+                connectToPeer(targetId.trim());
+              }
+            });
+            statusPanel.querySelector('div:first-child').appendChild(btn);
           }
         }, 100);
 
-        // 生成一个短ID（6-8位），便于手动输入
         const shortId = 'scan-' + generateShortId();
         myPeerId = shortId;
         peerIdDisplay.textContent = shortId;
@@ -719,16 +1374,14 @@
         });
 
         peer.on('connection', (conn) => {
-          // 收到连接
           if (dataConnection && dataConnection.open) {
-            // 已有连接，拒绝新连接？或者关闭旧的
             conn.close();
             return;
           }
           dataConnection = conn;
           setupDataConnection(conn);
           updateConnectionUI(true);
-          showToast('手机已连接');
+          showToast('设备已连接');
         });
 
         peer.on('error', (err) => {
@@ -746,12 +1399,11 @@
         });
       }
 
-      // 设置数据连接的监听
       function setupDataConnection(conn) {
         conn.on('data', (data) => {
           console.log('收到数据:', data);
           if (data.type === 'photo' && data.dataUrl) {
-            addPhotoFromDataUrl(data.dataUrl, data.timestamp || Date.now());
+            addPhotoFromDataUrl(data.dataUrl, data.timestamp || Date.now(), true);
           } else if (data.type === 'ping') {
             conn.send({ type: 'pong' });
           }
@@ -775,7 +1427,6 @@
         });
       }
 
-      // 主动连接对方
       function connectToPeer(targetId) {
         if (!peer) {
           showToast('尚未准备好，请稍后');
@@ -791,7 +1442,6 @@
         showToast('正在连接 ' + targetId + ' …');
       }
 
-      // 重置连接
       function resetConnection() {
         if (dataConnection) {
           try { dataConnection.close(); } catch (e) {}
@@ -802,77 +1452,117 @@
           peer = null;
         }
         updateConnectionUI(false);
-        // 重新初始化
         initPeer();
         showToast('连接已重置');
       }
 
-      // ---------- 生成 PDF (扫描版) ----------
+      // ---------- 生成 PDF (含压缩与A4方向自适应) ----------
       async function generatePDF() {
         if (selectedIds.length === 0) return;
 
-        // 按照 selectedIds 的顺序获取照片
         const selectedPhotos = selectedIds.map(id => photos.find(p => p.id === id)).filter(p => p);
-
         if (selectedPhotos.length === 0) return;
 
         showToast('正在生成PDF…');
 
         try {
-          // 使用 jsPDF
           const { jsPDF } = window.jspdf;
+          
+          // 先确定所有页面的方向（基于第一张图或每张单独判断？为了统一，根据每张图自身比例决定方向，但jsPDF同一文档只能有一种方向，所以统一用第一张的方向或混合？）
+          // 更好的方案：每页根据图片方向使用不同方向（jsPDF支持addPage指定方向）
+          // 我们使用统一文档，但每页单独设置方向。
+          // 初始页面用第一张的方向
+          const firstPhoto = selectedPhotos[0];
+          const firstLandscape = firstPhoto.width > firstPhoto.height;
+          const firstA4 = getA4Dimensions(firstLandscape);
+          
           const pdf = new jsPDF({
-            orientation: 'portrait',
+            orientation: firstLandscape ? 'landscape' : 'portrait',
             unit: 'mm',
             format: 'a4'
           });
 
-          const pageWidth = pdf.internal.pageSize.getWidth();
-          const pageHeight = pdf.internal.pageSize.getHeight();
-          const margin = 10; // mm
-          const maxWidth = pageWidth - margin * 2;
-          const maxHeight = pageHeight - margin * 2;
+          const quality = pdfQualitySelect.value; // high, medium, low
+          // 根据质量决定图片压缩参数
+          let jpegQuality = 0.9;
+          let maxDim = 2000;
+          if (quality === 'medium') {
+            jpegQuality = 0.75;
+            maxDim = 1600;
+          } else if (quality === 'low') {
+            jpegQuality = 0.55;
+            maxDim = 1200;
+          }
 
           for (let i = 0; i < selectedPhotos.length; i++) {
             const photo = selectedPhotos[i];
-            const imgData = photo.dataUrl;
-
+            
+            // 判断当前页方向
+            const isLandscape = photo.width > photo.height;
+            const a4 = getA4Dimensions(isLandscape);
+            
             if (i > 0) {
-              pdf.addPage();
+              pdf.addPage('a4', isLandscape ? 'landscape' : 'portrait');
             }
 
-            // 将图片添加到PDF，保持比例适应页面
-            // 需要获取图片原始尺寸，可以通过Image对象
-            const img = new Image();
-            img.src = imgData;
-            await new Promise((resolve, reject) => {
-              img.onload = resolve;
-              img.onerror = reject;
-            });
+            // 加载并压缩图片
+            let imgData = photo.dataUrl;
+            let imgWidth = photo.width;
+            let imgHeight = photo.height;
 
-            const imgWidth = img.width;
-            const imgHeight = img.height;
+            // 如果图片尺寸过大，进行压缩
+            if (Math.max(imgWidth, imgHeight) > maxDim) {
+              const scale = maxDim / Math.max(imgWidth, imgHeight);
+              const newW = Math.round(imgWidth * scale);
+              const newH = Math.round(imgHeight * scale);
+              
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = newW;
+              tempCanvas.height = newH;
+              const tempCtx = tempCanvas.getContext('2d');
+              
+              const imgEl = new Image();
+              imgEl.src = imgData;
+              await new Promise((resolve) => { imgEl.onload = resolve; });
+              
+              tempCtx.drawImage(imgEl, 0, 0, newW, newH);
+              imgData = tempCanvas.toDataURL('image/jpeg', jpegQuality);
+              imgWidth = newW;
+              imgHeight = newH;
+            } else if (jpegQuality < 0.9) {
+              // 重新编码以降低质量
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = imgWidth;
+              tempCanvas.height = imgHeight;
+              const tempCtx = tempCanvas.getContext('2d');
+              const imgEl = new Image();
+              imgEl.src = imgData;
+              await new Promise((resolve) => { imgEl.onload = resolve; });
+              tempCtx.drawImage(imgEl, 0, 0, imgWidth, imgHeight);
+              imgData = tempCanvas.toDataURL('image/jpeg', jpegQuality);
+            }
 
-            // 计算缩放比例
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+            const margin = 10;
+            const maxWidth = pageWidth - margin * 2;
+            const maxHeight = pageHeight - margin * 2;
+
             const ratio = Math.min(maxWidth / imgWidth, maxHeight / imgHeight);
             const displayWidth = imgWidth * ratio;
             const displayHeight = imgHeight * ratio;
-            // 居中
             const x = margin + (maxWidth - displayWidth) / 2;
             const y = margin + (maxHeight - displayHeight) / 2;
 
-            // 添加图片
             pdf.addImage(imgData, 'JPEG', x, y, displayWidth, displayHeight, undefined, 'FAST');
 
-            // 可选：添加页码
             pdf.setFontSize(10);
             pdf.setTextColor(150);
             pdf.text(`扫描件 ${i+1} / ${selectedPhotos.length}`, pageWidth / 2, pageHeight - 5, { align: 'center' });
           }
 
-          // 保存PDF
           pdf.save(`扫描文档_${new Date().toISOString().slice(0,10)}.pdf`);
-          showToast(`已生成 ${selectedPhotos.length} 页PDF`);
+          showToast(`已生成 ${selectedPhotos.length} 页PDF (质量: ${quality})`);
         } catch (err) {
           console.error('PDF生成失败:', err);
           showToast('PDF生成失败，请重试');
@@ -881,19 +1571,16 @@
 
       // ---------- 事件绑定 ----------
       function bindEvents() {
-        // 复制ID
         copyPeerIdBtn.addEventListener('click', () => {
           if (myPeerId) {
             navigator.clipboard.writeText(myPeerId).then(() => {
               showToast('ID已复制: ' + myPeerId);
             }).catch(() => {
-              // 降级
               prompt('复制此ID:', myPeerId);
             });
           }
         });
 
-        // 手机拍照
         mobileCaptureBtn.addEventListener('click', () => {
           mobileCameraInput.click();
         });
@@ -903,10 +1590,9 @@
           if (file) {
             handleMobileCapture(file);
           }
-          mobileCameraInput.value = ''; // 允许重复选择
+          mobileCameraInput.value = '';
         });
 
-        // 电脑端连接手机
         connectToPeerBtn.addEventListener('click', () => {
           const targetId = prompt('请输入手机端显示的ID（例如 scan-abcd1234）:');
           if (targetId && targetId.trim()) {
@@ -914,17 +1600,13 @@
           }
         });
 
-        // 重置连接
         resetConnectionBtn.addEventListener('click', resetConnection);
-
-        // 清空所有照片
         clearAllBtn.addEventListener('click', () => {
           if (photos.length > 0 && confirm('确定清空所有照片吗？')) {
             clearAllPhotos();
           }
         });
 
-        // 取消选择
         clearSelectionBtn.addEventListener('click', () => {
           selectedIds = [];
           updatePhotoGrid();
@@ -932,31 +1614,108 @@
           showToast('已取消选择');
         });
 
-        // 生成PDF
         generatePdfBtn.addEventListener('click', generatePDF);
 
-        // 页面关闭前销毁peer
-        window.addEventListener('beforeunload', () => {
-          if (peer) {
-            peer.destroy();
+        closeCropModalBtn.addEventListener('click', closeCropModal);
+        autoDetectBtn.addEventListener('click', autoDetectCorners);
+        resetCornersBtn.addEventListener('click', resetCorners);
+        applyCropBtn.addEventListener('click', applyCrop);
+        
+        cropModal.addEventListener('click', (e) => {
+          if (e.target === cropModal) {
+            closeCropModal();
           }
         });
+
+        // 模式切换
+        modeToggle.addEventListener('click', (e) => {
+          const btn = e.target.closest('.mode-btn');
+          if (!btn) return;
+          const mode = btn.dataset.mode;
+          if (mode === currentMode) return;
+          currentMode = mode;
+          document.querySelectorAll('.mode-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.mode === mode);
+          });
+          // 重新预览
+          if (originalImage && corners.length === 4) {
+            applyCropPreview();
+          }
+        });
+
+        // 对比度滑块
+        contrastSlider.addEventListener('input', (e) => {
+          currentContrast = parseFloat(e.target.value);
+          contrastValue.textContent = currentContrast.toFixed(1);
+          if (originalImage && corners.length === 4) {
+            applyCropPreview();
+          }
+        });
+
+        window.addEventListener('resize', () => {
+          if (cropModal.classList.contains('active') && originalImage) {
+            const maxWidth = Math.min(window.innerWidth * 0.85, 800);
+            canvasScale = Math.min(maxWidth / imgWidth, (window.innerHeight * 0.5) / imgHeight, 1);
+            canvasWidth = Math.round(imgWidth * canvasScale);
+            canvasHeight = Math.round(imgHeight * canvasScale);
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+            resetCorners();
+            drawCanvas();
+          }
+        });
+
+        window.addEventListener('beforeunload', () => {
+          if (peer) peer.destroy();
+        });
+
+        // 预览函数（实际上在模态框中我们只预览角点，不实时处理图片，但模式切换和对比度变化需要提示）
+        function applyCropPreview() {
+          // 这里我们无需重新绘制画布（画布只显示原图和角点），但可以显示提示
+          // 实际处理在应用时进行
+          cropHint.innerHTML = `🎨 模式: ${currentMode === 'color' ? '彩色' : '灰度'} · 对比度: ${currentContrast.toFixed(1)} (点击应用生效)`;
+        }
       }
+
+      // 手机拍照
+      function handleMobileCapture(file) {
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const dataUrl = e.target.result;
+          addPhotoFromDataUrl(dataUrl, Date.now(), true);
+          if (dataConnection && dataConnection.open) {
+            dataConnection.send({
+              type: 'photo',
+              dataUrl: dataUrl,
+              timestamp: Date.now()
+            });
+            showToast('照片已同步到电脑');
+          } else {
+            showToast('照片已保存 (未连接电脑)');
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // 覆盖 openCropEditor 以包含交互设置
+      const originalOpenCropEditor = openCropEditor;
+      openCropEditor = function(photoId) {
+        originalOpenCropEditor(photoId);
+        if (!window._canvasInteractionSetup) {
+          setupCanvasInteraction();
+          window._canvasInteractionSetup = true;
+        }
+      };
 
       // ---------- 启动 ----------
       function init() {
-        // 如果是手机端，自动显示拍照按钮；电脑端隐藏
-        // CSS已经处理
         initPeer();
         bindEvents();
         updateConnectionUI(false);
-        updatePhotoGrid(); // 初始化空状态
-
-        // 手机端可添加额外的连接按钮（已在initPeer中动态添加）
-        // 如果移动端，滚动到拍照按钮友好
+        updatePhotoGrid();
       }
 
-      // 页面加载后执行
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
       } else {
